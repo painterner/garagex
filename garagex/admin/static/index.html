@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>访问密钥 · GarageX</title><meta name="robots" content="noindex,nofollow">
+<link rel="stylesheet" href="/admin/style.css"><script type="module" src="/admin/app.js"></script></head>
+<body>
+<section id="login-view" class="login-view">
+  <div class="login-story"><a class="brand" href="/docs/"><span class="brand-mark">P</span>GarageX <span class="brand-light">S3</span></a>
+    <div><span class="eyebrow">STORAGE ADMINISTRATION</span><h1>让每一次访问，<br>都有明确的权限。</h1><p>管理 S3 访问密钥，为应用配置所需的桶权限。</p><div class="story-rule"></div><p class="small">一个存储入口 · 标准 S3 API</p></div>
+    <a class="story-link" href="/docs/">查看外部接入文档 <span aria-hidden="true">↗</span></a></div>
+  <main class="login-main"><form id="login-form" class="login-card">
+    <span class="eyebrow">ADMIN CONSOLE</span><h2>登录管理控制台</h2><p class="muted">使用平台或客户管理 S3 密钥登录。应用密钥用于数据访问。</p>
+    <label for="login-access">Access Key ID</label><input id="login-access" name="access" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="GK…" required>
+    <label for="login-secret">Secret Access Key</label><input id="login-secret" name="secret" type="password" autocomplete="off" spellcheck="false" required>
+    <p id="login-error" class="error" role="alert" hidden></p><button id="login-submit" class="primary full" type="submit">登录控制台 <span aria-hidden="true">→</span></button>
+    <p class="login-note">密钥仅在当前页面内存中用于请求签名；刷新或退出后需重新登录。请在可信设备上操作。</p>
+  </form></main>
+</section>
+<div id="console-view" class="console-view" hidden>
+  <aside class="sidebar"><a class="brand" href="/admin/"><span class="brand-mark">P</span>GarageX <span class="brand-light">S3</span></a>
+    <div class="nav-group"><span class="nav-label">工作空间</span><a id="nav-keys" class="nav-item active" href="#keys" aria-current="page"><span aria-hidden="true">▤</span>访问密钥<span class="nav-active-dot"></span></a><a id="nav-buckets" class="nav-item" href="#buckets"><span aria-hidden="true">▱</span>存储桶<span class="nav-active-dot"></span></a><a id="nav-tenants" class="nav-item" href="#tenants" hidden>客户租户</a><a id="nav-usage" class="nav-item" href="#usage" hidden>用量与配额</a><a class="nav-item" href="/docs/"><span aria-hidden="true">↗</span>API 接入文档</a></div>
+    <div class="sidebar-footer"><span class="status-dot"></span>私有对象存储<span class="small muted">S3 compatible</span></div>
+  </aside>
+  <div class="workspace"><header class="topbar"><div class="breadcrumb">控制台 <span>/</span> <span id="current-page">访问密钥</span></div><div class="account"><span class="account-avatar">A</span><span id="account-name">管理员</span><button id="logout" class="text-button" type="button">退出</button></div></header>
+    <main class="content"><section id="keys-view"><div class="page-heading"><div><span class="eyebrow">ACCESS MANAGEMENT</span><h1>访问密钥</h1><p class="muted">为应用创建独立凭据，并明确它可以访问的存储桶。</p></div><button id="open-create" class="primary" type="button"><span aria-hidden="true">＋</span> 创建密钥</button></div>
+      <section class="stats" aria-label="连接概览"><div class="stat"><span class="stat-label">当前页密钥</span><strong id="key-count">—</strong><span class="stat-note">每页最多 30 个</span></div><div class="stat"><span class="stat-label">存储桶</span><strong id="bucket-count">—</strong><span class="stat-note">可按桶分配读写权限</span></div><div class="stat endpoint-stat"><span class="stat-label">S3 Endpoint</span><strong id="endpoint">s3.example.com</strong><span class="stat-note">Region: <span id="region">garage</span> · Path style</span></div></section>
+      <div id="page-error" class="error-banner" role="alert" hidden></div>
+      <section class="keys-panel" aria-labelledby="list-title"><div class="panel-toolbar"><div><h2 id="list-title">凭据列表</h2><span class="muted small">Secret Key 默认隐藏</span></div><div class="table-tools"><label class="search"><span aria-hidden="true">⌕</span><span class="sr-only">搜索当前页密钥</span><input id="search" type="search" placeholder="搜索当前页名称或 Key ID"></label><button id="refresh" class="secondary" type="button">刷新</button></div></div>
+        <div class="table-wrap"><table><thead><tr><th>名称 / Access Key ID</th><th>桶权限</th><th>状态</th><th>创建时间</th><th><span class="sr-only">操作</span></th></tr></thead><tbody id="key-rows"></tbody></table></div>
+        <div id="list-empty" class="empty" hidden></div>
+        <div class="panel-footer"><span id="list-caption" class="muted small" aria-live="polite">正在加载…</span><div class="pagination"><button id="previous" class="text-button" disabled>上一页</button><span id="page-number" class="muted small">1</span><button id="next" class="text-button" disabled>下一页</button></div></div>
+      </section>
+      <div class="info-note"><span class="note-icon" aria-hidden="true">i</span><p>新密钥用于标准 S3 API，只授予所选桶的读、写权限。客户管理密钥可登录控制台；客户应用密钥可调用授权桶的 S3 和扩展 API。<a href="/docs/">接入说明 ↗</a></p></div>
+    </section>
+<section id="buckets-view" hidden>
+  <div class="page-heading"><div><span class="eyebrow">OBJECT STORAGE</span><h1>存储桶</h1><p class="muted">查看存储用量与授权范围，为不同用途创建独立的桶。</p></div><button id="open-create-bucket" class="primary" type="button"><span aria-hidden="true">＋</span> 创建存储桶</button></div>
+  <section class="stats" aria-label="存储概览"><div class="stat"><span class="stat-label">存储桶</span><strong id="storage-bucket-count">—</strong><span class="stat-note">所有桶均为私有访问</span></div><div class="stat"><span class="stat-label">对象数量</span><strong id="storage-object-count">—</strong><span class="stat-note">存储服务统计</span></div><div class="stat"><span class="stat-label">对象占用容量</span><strong id="storage-bytes">—</strong><span class="stat-note">不含未完成的分片上传</span></div></section>
+  <div id="bucket-page-error" class="error-banner" role="alert" hidden></div>
+  <section class="keys-panel" aria-labelledby="buckets-title"><div class="panel-toolbar"><div><h2 id="buckets-title">存储桶列表</h2><span class="muted small">统计与权限来自存储服务</span></div><div class="table-tools"><label class="search"><span aria-hidden="true">⌕</span><span class="sr-only">搜索存储桶</span><input id="bucket-search" type="search" placeholder="搜索名称或 Bucket ID"></label><button id="refresh-buckets" class="secondary" type="button">刷新</button></div></div>
+    <div class="table-wrap"><table><thead><tr><th>桶名称 / Bucket ID</th><th>对象数量</th><th>占用容量</th><th>授权密钥</th><th>创建时间</th><th><span class="sr-only">操作</span></th></tr></thead><tbody id="bucket-rows"></tbody></table></div>
+    <div id="bucket-list-empty" class="empty" hidden></div><div class="panel-footer"><span id="bucket-list-caption" class="muted small" aria-live="polite">正在加载…</span></div>
+  </section>
+  <div class="info-note"><span class="note-icon" aria-hidden="true">i</span><p>新桶为私有访问。客户管理密钥自动获得读写权限，应用密钥需单独授权。代理下载可指定自己的桶。</p></div>
+</section>
+<section id="tenants-view" hidden>
+<div class="page-heading"><div><span class="eyebrow">CUSTOMER WORKSPACES</span><h1>客户租户</h1><p class="muted">开通独立客户空间。客户使用自己的 S3 管理密钥登录。</p></div><button id="open-tenant" class="primary">开通客户</button></div>
+<p id="tenant-error" class="error-banner" hidden></p><section class="keys-panel"><div class="panel-toolbar"><h2>租户列表</h2><button id="refresh-tenants" class="secondary">刷新</button></div>
+<div class="table-wrap"><table><thead><tr><th>客户</th><th>分配容量 / 总配额</th><th>桶 / 密钥 / 并发上限</th><th>状态</th><th>操作</th></tr></thead><tbody id="tenant-rows"></tbody></table></div><p id="tenant-empty" class="empty" hidden>尚未开通客户。</p></section></section>
+<section id="usage-view" hidden><div class="page-heading"><div><span class="eyebrow">USAGE AND LIMITS</span><h1>用量与配额</h1><p class="muted">对象存储统计可能略有延迟。流量与请求暂不作为计费数据。</p></div><button id="refresh-usage" class="secondary">刷新</button></div>
+<p id="usage-error" class="error-banner" hidden></p><section class="stats"><div class="stat"><span class="stat-label">已存储 / 总配额</span><strong id="usage-bytes">—</strong><span id="usage-allocation" class="stat-note"></span></div><div class="stat"><span class="stat-label">存储桶 / 密钥</span><strong id="usage-counts">—</strong><span id="usage-limits" class="stat-note"></span></div><div class="stat"><span class="stat-label">代理下载并发上限</span><strong id="usage-concurrency">—</strong><span class="stat-note">同时受服务全局上限约束</span></div></section></section>
+<section id="objects-view" hidden><div class="page-heading"><div><span class="eyebrow">BUCKET CONTENTS</span><h1 id="objects-title">桶内文件</h1><p id="objects-subtitle" class="muted"></p></div><a href="#buckets" class="secondary">返回存储桶</a></div>
+<p id="objects-error" class="error-banner" hidden></p><section class="keys-panel"><div id="object-breadcrumbs" class="panel-toolbar"></div><form id="object-search-form" class="panel-toolbar"><label class="search"><span class="sr-only">Key 前缀</span><input id="object-prefix" placeholder="按完整 Key 前缀查找" autocomplete="off"></label><select id="object-mode" aria-label="列表模式"><option value="tree">目录浏览</option><option value="flat">递归列出</option></select><button class="secondary">查找</button></form>
+<div class="table-wrap"><table><thead><tr><th>名称 / Key</th><th>大小</th><th>更新时间</th><th>操作</th></tr></thead><tbody id="object-rows"></tbody></table></div><p id="object-empty" class="empty" hidden>此前缀下没有对象。</p><div class="panel-footer"><span id="object-caption" class="muted small"></span><div><button id="objects-previous" class="text-button">上一页</button><button id="objects-next" class="text-button">下一页</button></div></div></section></section>
+</main><footer class="workspace-footer">GarageX <span>凭据即访问权限，请仅分享给可信的应用。</span></footer>
+  </div>
+</div>
+<dialog id="create-dialog" aria-labelledby="create-title"><form id="create-form">
+  <div class="dialog-heading"><div><span class="eyebrow">NEW CREDENTIAL</span><h2 id="create-title">创建访问密钥</h2></div><button class="icon-button" type="button" data-close="create-dialog" aria-label="关闭创建窗口">×</button></div>
+  <p class="muted">为应用命名，并选择它需要的桶权限。</p><label for="key-name">密钥名称 <span class="required">*</span></label><input id="key-name" maxlength="80" required placeholder="例如：backup-service" autocomplete="off">
+  <div class="field-heading"><span class="field-label">存储桶权限</span><span class="small muted">至少选择一项</span></div><div id="bucket-grants" class="bucket-grants"></div>
+  <p class="small muted">读：列举、下载对象。写：上传、覆盖、删除对象。新密钥不授予桶管理权限，默认永不过期。</p>
+  <p id="create-error" class="error" role="alert" hidden></p><div class="dialog-actions"><button type="button" class="secondary" data-close="create-dialog">取消</button><button id="create-submit" type="submit" class="primary">创建密钥</button></div>
+</form></dialog>
+<dialog id="detail-dialog" aria-labelledby="detail-title"><div class="dialog-heading"><div><span class="eyebrow">CREDENTIAL DETAILS</span><h2 id="detail-title">密钥详情</h2></div><button class="icon-button" type="button" data-close="detail-dialog" aria-label="关闭密钥详情">×</button></div>
+  <p id="detail-status" class="muted"></p><label for="detail-access">Access Key ID</label><div class="copy-field"><input id="detail-access" readonly spellcheck="false"><button id="copy-access" class="secondary" type="button">复制</button></div>
+  <label for="detail-secret">Secret Access Key</label><div class="copy-field"><input id="detail-secret" readonly type="password" placeholder="点击「显示」后读取" spellcheck="false"><button id="reveal-secret" class="secondary" type="button">显示</button><button id="copy-secret" class="secondary" type="button" disabled>复制</button></div>
+  <p class="small muted">显示后 60 秒自动隐藏并清空；关闭窗口也会清空。创建结果和重新读取的密钥均不会写入浏览器存储。</p>
+  <h3>授权范围</h3><div id="detail-grants" class="detail-grants"></div><p id="detail-error" class="error" role="alert" hidden></p>
+  <div class="dialog-actions"><button id="revoke-key" class="secondary" type="button" hidden>撤销应用密钥</button><button id="download-credentials" class="secondary" type="button" disabled>下载凭据 JSON</button><button class="primary" type="button" data-close="detail-dialog">完成</button></div>
+</dialog>
+<dialog id="bucket-create-dialog" aria-labelledby="bucket-create-title"><form id="bucket-create-form">
+  <div class="dialog-heading"><div><span class="eyebrow">NEW BUCKET</span><h2 id="bucket-create-title">创建存储桶</h2></div><button class="icon-button" type="button" data-close="bucket-create-dialog" aria-label="关闭创建存储桶窗口">×</button></div>
+  <p class="muted">使用独立的桶组织备份、图片或应用文件。</p><label for="bucket-name">桶名称 <span class="required">*</span></label>
+  <input id="bucket-name" required minlength="3" maxlength="63" pattern="[a-z0-9][a-z0-9-]{1,61}[a-z0-9]" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="例如：app-backups" aria-describedby="bucket-name-hint">
+  <p id="bucket-name-hint" class="small muted">3～63 个小写字母、数字或短横线，以字母或数字开头、结尾。名称须唯一。</p>
+  <div id="bucket-quota-field" hidden><label for="bucket-quota">桶容量配额（GiB）</label><input id="bucket-quota" type="number" min="0.001" step="0.001" value="1" required><p class="muted small">桶配额总和不得超过租户容量；S3 上传也受该配额约束。</p></div><div class="bucket-create-note"><strong>私有访问</strong><p>管理密钥自动获得读写权限；其他应用需要另外分配密钥权限。</p></div>
+  <p id="bucket-create-error" class="error" role="alert" hidden></p><div class="dialog-actions"><button class="secondary" type="button" data-close="bucket-create-dialog">取消</button><button id="bucket-create-submit" type="submit" class="primary">创建存储桶</button></div>
+</form></dialog>
+<dialog id="bucket-detail-dialog" aria-labelledby="bucket-detail-title"><div class="dialog-heading"><div><span class="eyebrow">BUCKET DETAILS</span><h2 id="bucket-detail-title">存储桶详情</h2></div><button class="icon-button" type="button" data-close="bucket-detail-dialog" aria-label="关闭存储桶详情">×</button></div>
+  <p id="bucket-detail-created" class="muted"></p><label for="bucket-detail-id">Bucket ID</label><div class="copy-field"><input id="bucket-detail-id" readonly spellcheck="false"><button id="copy-bucket-id" class="secondary" type="button">复制</button></div>
+  <label for="bucket-detail-uri">S3 地址</label><div class="copy-field"><input id="bucket-detail-uri" readonly spellcheck="false"><button id="copy-bucket-uri" class="secondary" type="button">复制</button></div>
+  <dl class="bucket-facts"><div><dt>对象数量</dt><dd id="bucket-detail-objects">—</dd></div><div><dt>占用容量</dt><dd id="bucket-detail-bytes">—</dd></div><div><dt>未完成上传</dt><dd id="bucket-detail-uploads">—</dd></div><div><dt>容量配额</dt><dd id="bucket-detail-quota">—</dd></div><div><dt>未完成分片上传</dt><dd id="bucket-detail-multipart">—</dd></div><div><dt>对象数量配额</dt><dd id="bucket-detail-object-quota">—</dd></div></dl>
+  <h3>已授权密钥</h3><div id="bucket-detail-keys" class="detail-grants"></div>
+  <div class="dialog-actions"><button id="bucket-browse" class="secondary" type="button">浏览文件</button><button id="bucket-create-key" class="secondary" type="button">为此桶创建密钥</button><button class="primary" type="button" data-close="bucket-detail-dialog">完成</button></div>
+</dialog>
+<dialog id="tenant-dialog"><form id="tenant-form"><div class="dialog-heading"><h2>开通客户租户</h2><button type="button" class="icon-button" data-close="tenant-dialog" aria-label="关闭">×</button></div>
+<label for="tenant-name">客户名称</label><input id="tenant-name" maxlength="80" required>
+<label for="tenant-quota">总容量配额（GiB）</label><input id="tenant-quota" type="number" min="0.001" max="10240" step="0.001" value="10" required>
+<label for="tenant-buckets">桶数上限</label><input id="tenant-buckets" type="number" min="1" max="100" value="10" required>
+<label for="tenant-keys">密钥数上限（含管理密钥）</label><input id="tenant-keys" type="number" min="2" max="100" value="10" required>
+<label for="tenant-concurrency">代理下载并发上限</label><input id="tenant-concurrency" type="number" min="1" max="4" value="2" required>
+<p class="muted small">开通后显示客户专属 S3 管理密钥。客户可用它登录、建桶、创建应用密钥和查看用量。</p><p id="tenant-create-error" class="error" hidden></p><div class="dialog-actions"><button type="button" class="secondary" data-close="tenant-dialog">取消</button><button id="tenant-submit" class="primary">开通客户</button></div></form></dialog>
+<dialog id="object-dialog"><div class="dialog-heading"><h2 id="object-title">对象详情</h2><button type="button" class="icon-button" data-close="object-dialog" aria-label="关闭">×</button></div><pre id="object-facts" class="object-facts"></pre><p id="object-detail-error" class="error" hidden></p><img id="object-image" class="object-image" alt="对象预览" hidden><pre id="object-text" class="object-text" hidden></pre><p id="object-preview-note" class="muted small"></p><div class="dialog-actions"><button id="object-preview" class="secondary" hidden>预览</button><button id="object-download" class="primary">下载文件</button></div></dialog>
+<div id="toast" class="toast" role="status" hidden></div>
+</body></html>

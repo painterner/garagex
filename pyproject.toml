@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "garagex"
+version = "0.1.0"
+description = "Garage S3 storage with a web console, streaming proxy downloads and network reports"
+requires-python = ">=3.12"
+dependencies = ["aiohttp==3.14.5", "boto3==1.43.122"]
+
+[project.scripts]
+garagex-proxy = "garagex.proxy.app:main"
+garagex-admin = "garagex.admin.app:main"
+
+[tool.setuptools.packages.find]
+include = ["garagex*"]
+
+[tool.setuptools.package-data]
+"garagex.admin" = ["static/*"]

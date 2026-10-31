@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GarageX 外部接入文档</title>
+<meta name="description" content="使用一套 S3 Access Key 和 Secret Key 上传、下载对象，调用流式代理下载接口并查询任务状态。">
+<link rel="stylesheet" href="style.css"></head><body>
+<div class="layout"><aside aria-label="文档导航"><a class="brand" href="./">GarageX</a>
+<p>外部接入文档</p><nav><a href="#quickstart">连接与鉴权</a><a href="#s3">S3 上传下载</a><a href="#proxy">流式代理下载</a><a href="#jobs">任务与完成语义</a><a href="#network">纯网络测试</a><a href="#reports">延迟与带宽报告</a><a href="#python">Python 客户端</a><a href="#errors">错误处理</a><a href="#limits">限制与兼容性</a><a href="#reference">下载与参考</a><a href="/admin/">管理控制台 ↗</a></nav>
+<a class="spec" href="openapi.json">OpenAPI JSON ↗</a></aside>
+<main><header><span class="eyebrow">API 接入指南</span><h1>GarageX 外部接入文档</h1>
+<p class="lead">使用同一套 S3 Access Key 和 Secret Key 完成对象上传、下载，以及“从外部 URL 下载、同时保存到 S3 并向调用方返回数据”的流式代理。所有 API 均通过 HTTPS 访问。</p>
+<div class="links"><a href="openapi.json">下载代理 API 的 OpenAPI</a><a href="examples/garagex_client.py" download>下载 Python 客户端</a></div></header>
+<section id="quickstart"><h2>1. 连接与鉴权</h2>
+<p>向平台管理员获取客户专属 S3 管理密钥，或使用客户创建的应用 Access Key 和 Secret Key。S3 与代理扩展接口共用这一对密钥，鉴权方式都是 <strong>AWS Signature Version 4</strong>；没有单独的代理 Token。</p>
+<div class="table"><table><thead><tr><th>参数</th><th>值</th></tr></thead><tbody>
+<tr><td>S3 Endpoint</td><td><code>https://s3.example.com</code></td></tr>
+<tr><td>默认 Bucket</td><td><code>garagex</code></td></tr><tr><td>Region / 签名 Service</td><td><code>garage</code> / <code>s3</code></td></tr>
+<tr><td>寻址方式</td><td>Path style，例如 <code>/garagex/uploads/file.txt</code>；SDK 设置 <code>forcePathStyle=true</code> 或 <code>addressing_style=path</code></td></tr>
+<tr><td>对象权限</td><td>私有；下载需签名，或使用有期限的预签名 URL</td></tr></tbody></table></div>
+<p>先在调用方终端设置以下变量，替换两个密钥占位值。下面所有示例复用它们：</p><pre><code>export AWS_ACCESS_KEY_ID='YOUR_ACCESS_KEY'
+export AWS_SECRET_ACCESS_KEY='YOUR_SECRET_KEY'
+export AWS_DEFAULT_REGION='garage'
+export S3_ENDPOINT='https://s3.example.com'
+export S3_BUCKET='garagex'</code></pre>
+<p>curl 示例需要支持 <code>--aws-sigv4</code>（7.75.0 起支持）。代理接口检查请求时间与服务端的偏差不超过 15 分钟；请保持调用方系统时间准确。签名完成后不要再修改请求体、路径或已签名的请求头。</p>
+</section>
+<section id="s3"><h2>2. S3 上传、下载与列举</h2>
+<h3>上传一个对象</h3><p>以下命令把调用方的 <code>hello.txt</code> 保存到 <code>s3://garagex/uploads/hello.txt</code>。标准 S3 上传会替换同 Key 的当前内容；本服务没有对象版本历史。</p><pre><code>printf 'hello garagex\n' &gt; hello.txt
+
+curl --fail --show-error \
+  --aws-sigv4 'aws:amz:garage:s3' \
+  --user &quot;$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY&quot; \
+  --upload-file hello.txt \
+  &quot;$S3_ENDPOINT/$S3_BUCKET/uploads/hello.txt&quot;</code></pre>
+<h3>下载对象</h3><pre><code>curl --fail --show-error \
+  --aws-sigv4 'aws:amz:garage:s3' \
+  --user &quot;$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY&quot; \
+  &quot;$S3_ENDPOINT/$S3_BUCKET/uploads/hello.txt&quot; \
+  --output downloaded.txt</code></pre>
+<h3>列举对象</h3><p>curl 返回标准 S3 XML；应用程序可使用 SDK 分页列举。</p><pre><code>curl --fail --show-error \
+  --aws-sigv4 'aws:amz:garage:s3' \
+  --user &quot;$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY&quot; \
+  &quot;$S3_ENDPOINT/$S3_BUCKET?list-type=2&amp;prefix=uploads%2F&quot;</code></pre>
+<div class="table"><table><thead><tr><th>常用操作</th><th>HTTP 路径</th></tr></thead><tbody>
+<tr><td>上传 / 下载 / 查看元信息 / 删除</td><td><code>PUT / GET / HEAD / DELETE /garagex/{对象Key}</code></td></tr>
+<tr><td>列举</td><td><code>GET /garagex?list-type=2&amp;prefix=...</code></td></tr>
+<tr><td>大文件上传</td><td>使用 SDK 的 multipart upload；Python <code>upload_file()</code> 会按需要自动分片</td></tr>
+<tr><td>临时下载地址</td><td>使用 SDK 的 <code>generate_presigned_url("get_object", ...)</code>；见下方 Python 示例</td></tr></tbody></table></div>
+<p>对象 Key 含空格、中文或特殊字符时，建议使用 SDK 处理编码；手写 URL 时要分别处理路径和查询参数的 URL 编码。</p></section>
+<section id="proxy"><h2>3. 流式代理下载</h2><p>扩展接口复用调用方 S3 密钥。客户传入自己的实际桶名：<code>{&quot;url&quot;:&quot;https://example.com/file.bin&quot;,&quot;bucket&quot;:&quot;t-your-prefix-files&quot;}</code>。调用方须拥有该桶读写权限，且桶归属于本客户。原有平台调用可省略 bucket 使用初始桶。</p>
+<p><code>POST https://s3.example.com/_proxy/download</code></p>
+<p>请求体是 JSON，响应体是<strong>外部文件的二进制数据流</strong>。服务器从外部 URL 读取数据，同时向调用方发送数据并分片写入 S3；完整对象在下载成功、S3 提交完成后可见。</p>
+<div class="table"><table><thead><tr><th>JSON 字段</th><th>要求</th><th>说明</th></tr></thead><tbody>
+<tr><td><code>url</code></td><td>必填，字符串</td><td>公网 HTTP/HTTPS 文件地址，端口 80 或 443；可使用上游自己的带签名 URL</td></tr>
+<tr><td><code>key</code></td><td>可选，字符串</td><td>保存到 <code>garagex</code> 桶的对象 Key，必须以 <code>proxy/</code> 开头；省略时生成 <code>proxy/年/月/日/唯一ID-文件名</code></td></tr><tr><td><code>disconnect_mode</code></td><td>可选，默认 <code>continue</code></td><td><code>continue</code>：下游断开后继续保存；<code>stop_keep</code>：检测到断开后关闭上游连接，把本机已收到的文件前缀保存为 S3 对象</td></tr>
+<tr><td><code>retention_seconds</code></td><td>可选，默认 <code>null</code>（永久）</td><td>正整数 1～315360000，从对象保存完成时开始计时；适用于完整和部分文件。到期后后台约 5 秒内开始清理，失败会重试</td></tr></tbody></table></div>
+<p>Key 最长 1024 个 UTF-8 字节，不能含控制字符或 <code>.</code>、<code>..</code> 路径段。接口只接受表中的四个字段。代理下载不覆盖已有对象：同名对象或同名进行中任务返回 <code>409</code>。</p>
+<h3>curl 调用</h3><p>以下示例使用公开的 RFC 文本作为上游地址；换成自己的文件 URL 即可。<code>rfc9110.txt</code> 写在调用方，服务器另存一份到 S3。</p><pre><code>curl --fail --show-error --no-buffer \
+  --aws-sigv4 'aws:amz:garage:s3' \
+  --user &quot;$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY&quot; \
+  --header 'Content-Type: application/json' \
+  --data-binary '{&quot;url&quot;:&quot;https://www.rfc-editor.org/rfc/rfc9110.txt&quot;}' \
+  --dump-header proxy.headers \
+  --output rfc9110.txt \
+  &quot;$S3_ENDPOINT/_proxy/download&quot;</code></pre>
+<p>指定保存位置时，请把 JSON 改为：</p><pre><code>{&quot;url&quot;:&quot;https://www.rfc-editor.org/rfc/rfc9110.txt&quot;,&quot;key&quot;:&quot;proxy/my-rfc9110.txt&quot;}</code></pre>
+<h3>断开时保留部分文件与自动清理</h3>
+<pre><code>{"url":"https://www.python.org/ftp/python/3.12.10/Python-3.12.10.tgz",
+ "disconnect_mode":"stop_keep","retention_seconds":60}</code></pre>
+<p><code>stop_keep</code> 保存的前缀使用请求指定的同一个 Key，状态为 <code>stopped</code>、<code>is_partial=true</code>。它是可通过普通 S3 GET 下载的部分对象，不代表完整原文件；SHA-256 对应实际保留的字节。服务器可能比客户端多收到一些数据，因此对象大小可大于客户端已接收量。断开前尚未收到数据时不创建空对象。如果检测到断开前已完整保存，结果仍为 <code>completed</code>。</p>
+<p><code>retention_seconds</code> 仅控制本次代理生成的服务器对象；不会删除调用方的本地文件。省略或设为 <code>null</code> 均永久保留，不用 <code>0</code> 表示永久。清理计划持久保存并在服务重启后继续；删除前检查对象的任务标识，已被其他上传替换的对象会跳过。已有普通 S3 对象不受此项影响。</p>
+<h3>响应头</h3><div class="table"><table><thead><tr><th>响应头</th><th>用途</th></tr></thead><tbody>
+<tr><td><code>X-Download-Id</code></td><td>任务 ID，用于查询进度和结果</td></tr>
+<tr><td><code>X-Download-Status-Url</code></td><td>相对状态查询路径，例如 <code>/_proxy/jobs/{id}</code></td></tr>
+<tr><td><code>X-Download-Report-Url</code></td><td>签名访问的任务报告路径</td></tr><tr><td><code>X-Download-Elapsed-Seconds</code></td><td>客户端观测与任务时间轴对齐的秒数偏移</td></tr>
+<tr><td><code>X-S3-Bucket</code> / <code>X-S3-Key</code></td><td>保存目标；Key 使用 URL 编码，应用中需解码后作为 S3 Key 使用</td></tr>
+<tr><td><code>X-Source-Content-Length</code></td><td>上游提供 Content-Length 时返回，可用作进度总量；上游长度未知时省略</td></tr>
+<tr><td><code>Content-Type</code> / <code>Content-Encoding</code></td><td>保留上游文件的类型与内容编码；保存和返回的是同一份原始字节</td></tr></tbody></table></div>
+<p>不要把这个响应当作 JSON 解析。响应使用流式传输，没有文件大小对应的 <code>Content-Length</code>。curl 默认不解压上游内容；如应用自动解压 gzip 等内容，解压后的数据不能直接与任务记录中的原始字节 SHA-256 比较。</p></section>
+<section id="jobs"><h2>4. 任务进度与完成语义</h2>
+<p><code>GET /_proxy/jobs/{id}</code> 使用相同的 S3 SigV4 鉴权。任务 ID 在下载响应头中立即提供。</p><pre><code># 从 proxy.headers 的 X-Download-Id 获取任务 ID
+export JOB_ID='替换为任务ID'
+
+curl --fail --show-error \
+  --aws-sigv4 'aws:amz:garage:s3' \
+  --user &quot;$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY&quot; \
+  &quot;$S3_ENDPOINT/_proxy/jobs/$JOB_ID&quot;</code></pre>
+<p>完成后的 JSON 结构示例（ID、时间、Key 和校验值为示意）：</p><pre><code>{
+  &quot;id&quot;: &quot;0123456789abcdef0123456789abcdef&quot;,
+  &quot;state&quot;: &quot;completed&quot;,
+  &quot;bucket&quot;: &quot;garagex&quot;,
+  &quot;key&quot;: &quot;proxy/2026/10/30/generated-id-rfc9110.txt&quot;,
+  &quot;created_at&quot;: 1793328000,
+  &quot;bytes_downloaded&quot;: 502941,
+  &quot;bytes_stored&quot;: 502941,
+  &quot;client_connected&quot;: false,
+  &quot;content_type&quot;: &quot;text/plain&quot;,
+  &quot;source_size&quot;: 502941,
+  &quot;sha256&quot;: &quot;64位十六进制SHA256&quot;,
+  &quot;finished_at&quot;: 1793328002
+}</code></pre>
+<div class="table"><table><thead><tr><th>state</th><th>含义</th></tr></thead><tbody>
+<tr><td><code>starting</code></td><td>检查目标、连接上游</td></tr><tr><td><code>downloading</code></td><td>正在下载并向调用方返回数据</td></tr>
+<tr><td><code>committing</code></td><td>上游已读完，正在提交完整 S3 对象</td></tr><tr><td><code>completed</code></td><td>完整对象已保存，可通过 S3 读取</td></tr>
+<tr><td><code>stopped</code></td><td>下游断开，上游已停止；查看 <code>is_partial</code> 和 <code>object_available</code> 确认保留结果</td></tr>
+<tr><td><code>failed</code></td><td>未成功完成，查看 <code>error.code</code> 和 <code>error.message</code></td></tr></tbody></table></div>
+<p><code>bytes_downloaded</code> 是从上游读取的字节数，<code>bytes_stored</code> 是已写入 S3 的字节数。下载中已写入分片并不等于完整对象已经可读。<code>created_at</code>、<code>finished_at</code> 使用 Unix 秒时间戳，可能含小数。</p>
+<div class="note"><strong>成功判断：</strong>收到 HTTP 200 只表示文件流已经开始。应完整读到响应正常结束，并以任务状态 <code>completed</code> 确认保存完成。服务会在 S3 提交成功后才正常结束响应；中途出错会中断连接，已开始的 HTTP 200 无法改成 JSON 错误响应。</div>
+<p>调用方断开后，服务器默认继续下载保存；可用任务 ID 在另一个连接中查询。若服务进程重启，未完成任务会标记为 <code>failed</code>，不会自动续传。任务记录和过程采样保留约 7 天；对象保留期限独立控制，默认永久。有限期对象的清理计划不随任务记录过期而丢失。</p>
+<p>状态另外包含 <code>disconnect_mode</code>、<code>download_retention_seconds</code>、<code>expires_at</code>、<code>is_partial</code>、<code>object_available</code>、<code>storage_state</code> 和 <code>metrics</code>。<code>expires_at=null</code> 表示无预定过期时间；还应结合任务状态判断对象是否已生成。对象过期后状态中的 <code>storage_state=expired</code>、<code>object_available=false</code>，历史传输状态保持不变。</p>
+<h3>健康状态</h3><p>该接口同样需要签名：</p><pre><code>curl --fail --show-error \
+  --aws-sigv4 'aws:amz:garage:s3' \
+  --user &quot;$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY&quot; \
+  &quot;$S3_ENDPOINT/_proxy/health&quot;</code></pre><pre><code>{&quot;status&quot;:&quot;ok&quot;,&quot;active_downloads&quot;:0}</code></pre></section>
+<section id="network"><h2>5. 纯网络测试</h2>
+<p>使用独立客户端从需要测试的下游机器运行，分别测量“下游 ↔ 本服务”与“本服务 ← 指定公网 HTTP/HTTPS 上游”。测试数据直接生成或读取后丢弃，不生成 S3 对象、不保存测速数据文件到服务端磁盘。报告由客户端选择保存。</p>
+<pre><code>python3 garagex_client.py network-test \
+  --upstream https://www.python.org/ftp/python/3.12.10/Python-3.12.10.tgz \
+  --bytes 33554432 --seconds 5 \
+  --report network.json --report-html network.html</code></pre>
+<p>省略 <code>--upstream</code> 时只测下游。独立客户端先预热连接，测量 5 次 HTTP keepalive RTT，再下载随机载荷并上传等量测试载荷，最后可选测试上游。带宽均为应用载荷吞吐率，单位 Mbps（每秒百万 bit），不是网卡标称速率。请从外部下游运行：在服务器自己运行只反映服务器访问自身公网入口的路径。</p>
+<div class="table"><table><thead><tr><th>签名接口</th><th>参数与用途</th></tr></thead><tbody>
+<tr><td><code>GET /_proxy/network/ping</code></td><td>小响应；由调用方测量请求到响应读完的往返时间</td></tr>
+<tr><td><code>GET /_proxy/network/download</code></td><td><code>?bytes=33554432&amp;seconds=5</code>；生成随机载荷，达到字节数或时长后停止。调用方自行计时、统计实际收到的字节</td></tr>
+<tr><td><code>POST /_proxy/network/upload</code></td><td>原始二进制请求体；流式统计和丢弃。必须提供并签名 <code>X-Amz-Content-SHA256</code>，读完后核对实际 SHA-256；客户端在计时前计算签名哈希</td></tr>
+<tr><td><code>POST /_proxy/network/upstream</code></td><td>JSON <code>{"url":"https://...","bytes":33554432,"seconds":5}</code>；连接上游后按字节数或时长读取并丢弃</td></tr>
+<tr><td><code>GET /_proxy/network/results/{id}</code></td><td>查询下载测速的服务端写出统计；ID 来自 <code>X-Network-Test-Id</code>，仅在内存保留 10 分钟，重启丢失</td></tr>
+</tbody></table></div>
+<p><code>bytes</code> 默认 32 MiB，上限 512 MiB；<code>seconds</code> 默认 5，范围 0.1～30 秒，作用于下载和上游的载荷阶段。上传按完整字节数发送，上限 512 MiB、120 秒。网络负载测试最多同时 2 个。上游连接受连接/响应超时限制；同样禁止内网、回环、本机地址和非 80/443 端口，上游最终须返回 HTTP 200。</p>
+<p>延迟是往返指标：下游为 HTTP RTT，包含协议处理；上游为 Linux 内核的 TCP 平滑 RTT（SRTT）。DNS、连接与 TLS、响应头、首个正文数据时间另外记录；连接复用时 DNS/连接时间可能缺失。无法测得的指标返回 <code>null</code>，不填成零。它们不能作为单向延迟或同一种测量方法直接比较。</p></section>
+<section id="reports"><h2>6. 下载过程与完成报告</h2>
+<p>所有代理任务自动记录约每秒的上游接收速率、服务端写出速率、上游 TCP SRTT、累计字节与连接阶段耗时，任务结束时补充最终采样。独立客户端还会自动测量并上报下游实际接收量和 HTTP RTT，生成两段链路的变化曲线。</p>
+<pre><code>python3 garagex_client.py proxy \
+  https://www.python.org/ftp/python/3.12.10/Python-3.12.10.tgz \
+  -o source.tgz --disconnect-mode stop_keep --retention-seconds 60 \
+  --report download.json --report-html download.html
+
+# 主动收到 1 MiB 后断开，测试部分文件保留；服务器对象 60 秒后过期
+python3 garagex_client.py proxy \
+  https://www.python.org/ftp/python/3.12.10/Python-3.12.10.tgz \
+  -o prefix.bin --disconnect-mode stop_keep --stop-after-bytes 1048576 \
+  --retention-seconds 60 --report partial.json --report-html partial.html
+
+# 后续重新获取报告
+python3 garagex_client.py report "$JOB_ID" -o report.json --html report.html</code></pre>
+<p>JSON 报告适合程序处理；HTML 报告包含内嵌 SVG 曲线和完整 JSON，可离线打开。<code>GET /_proxy/jobs/{id}/report</code> 默认返回 JSON；加 <code>?format=html</code> 返回同类 HTML，仍需 SigV4 签名。<code>max_points</code> 默认 1000、范围 1～10000，长任务的曲线会下采样，摘要统计使用完整服务端采样。</p>
+<p>报告包含 <code>job</code>、<code>summary</code>、<code>timeline</code>、上游 RTT/速率统计，以及 <code>downstream_client</code> 的采样和统计。min、mean、p95、max 描述采样分布；全程平均吞吐率按总字节/总用时计算。服务端写入连接先到本机反向代理，这个写出速率不等于外部客户端的接收速率。仅用 curl 等客户端下载时，服务端采样仍会记录，下游实测部分为 <code>not_available</code>。</p>
+<p>自建客户端可调用 <code>POST /_proxy/jobs/{id}/observations</code>，用同一套 SigV4 密钥上报 <code>{"samples":[{"elapsed_seconds":1.2,"received_bytes":1048576,"rtt_ms":35.4}]}</code>。时间与字节计数须递增或持平；时间相对任务开始，可用响应头偏移对齐，每次 1～60 条、每任务最多 30000 条。下游数据明确标记为客户端上报值。报告与状态均受鉴权保护。</p>
+</section>
+<section id="python"><h2>7. Python 客户端与 SDK</h2>
+<p>可下载的独立客户端只依赖 <code>boto3</code>，可在外部机器运行，不依赖服务器上的 <code>s3ctl</code>。它支持上传、下载、列举、临时链接、代理下载、网络测试、过程监测和报告导出。下载目标文件已存在时，客户端会拒绝覆盖。</p><pre><code>python3 -m pip install boto3
+curl --fail --show-error \
+  https://s3.example.com/docs/examples/garagex_client.py \
+  --output garagex_client.py
+
+# 使用前面设置的同一套环境变量
+python3 garagex_client.py upload hello.txt uploads/hello.txt
+python3 garagex_client.py download uploads/hello.txt -o python-downloaded.txt
+python3 garagex_client.py ls uploads/
+python3 garagex_client.py presign uploads/hello.txt --expires 3600
+
+# 服务端边保存到 S3，边把响应写入调用方的 rfc-python.txt
+python3 garagex_client.py proxy \
+  https://www.rfc-editor.org/rfc/rfc9110.txt -o rfc-python.txt
+
+python3 garagex_client.py job &quot;$JOB_ID&quot;
+python3 garagex_client.py health</code></pre>
+<h3>在自己的程序中调用</h3><p>把下载的 <code>garagex_client.py</code> 放到项目中，再导入：</p><pre><code>from garagex_client import GarageXClient
+
+client = GarageXClient()  # 从标准 AWS 环境变量或凭据链读取同一套密钥
+
+client.upload(&quot;hello.txt&quot;, &quot;uploads/hello.txt&quot;)
+client.download(&quot;uploads/hello.txt&quot;, &quot;saved.txt&quot;)
+
+result = client.proxy(
+    &quot;https://www.rfc-editor.org/rfc/rfc9110.txt&quot;,
+    &quot;rfc-copy.txt&quot;,
+    # key=&quot;proxy/my-rfc.txt&quot;,  # 可省略；已有同名对象会返回 409
+    retention_seconds=60,  # 省略或 None 为永久
+    report_file=&quot;transfer.json&quot;, report_html=&quot;transfer.html&quot;,
+)
+print(result[&quot;id&quot;], result[&quot;key&quot;], result[&quot;sha256&quot;])
+
+# 生成临时下载地址，接收链接的人无需再提供密钥
+download_url = client.presign(&quot;uploads/hello.txt&quot;, expires=3600)</code></pre>
+<p>Python 代理下载会立即把任务 ID 打印到标准错误，分块写入临时文件，下载结束后验证任务状态和 SHA-256，再生成最终本地文件。调用方意外中断时会清理本地临时文件；服务端按所选 <code>disconnect_mode</code> 处理。<code>--stop-after-bytes</code> 是显式测试选项，会把收到的本地前缀保留下来。普通完整下载会校验状态和 SHA-256，测试前缀不作完整文件校验。</p>
+<h3>直接使用 Boto3 操作标准 S3</h3><p>代理下载是自定义扩展，不是标准 S3 SDK 的内置方法；使用上面的独立客户端或自行对该 HTTP 请求进行 SigV4 签名。标准对象操作可直接使用 Boto3：</p><pre><code>import os
+import boto3
+from botocore.config import Config
+
+options = {
+    &quot;signature_version&quot;: &quot;s3v4&quot;,
+    &quot;s3&quot;: {&quot;addressing_style&quot;: &quot;path&quot;},
+}
+for name in (&quot;request_checksum_calculation&quot;, &quot;response_checksum_validation&quot;):
+    if name in Config.OPTION_DEFAULTS:
+        options[name] = &quot;when_required&quot;
+
+s3 = boto3.client(
+    &quot;s3&quot;,
+    endpoint_url=os.environ[&quot;S3_ENDPOINT&quot;],
+    region_name=&quot;garage&quot;,
+    config=Config(**options),
+)
+s3.upload_file(&quot;hello.txt&quot;, &quot;garagex&quot;, &quot;uploads/hello.txt&quot;)
+s3.download_file(&quot;garagex&quot;, &quot;uploads/hello.txt&quot;, &quot;saved.txt&quot;)</code></pre>
+<p>较新 AWS SDK 的可选请求/响应校验配置使用 <code>when_required</code>，以便连接 S3 兼容存储。客户端会按当前 Botocore 支持的配置项设置它们。</p></section>
+<section id="errors"><h2>8. 错误处理</h2>
+<p>代理在响应体开始前发生错误时，返回对应 HTTP 状态和 JSON，例如：</p><pre><code>{&quot;error&quot;:{&quot;code&quot;:&quot;object_exists&quot;,&quot;message&quot;:&quot;This S3 key already exists; choose a new key.&quot;}}</code></pre>
+<div class="table"><table><thead><tr><th>HTTP 状态</th><th>常见原因</th><th>处理方式</th></tr></thead><tbody>
+<tr><td>400</td><td><code>invalid_json</code>、<code>invalid_request</code>、<code>invalid_url</code>、<code>blocked_source</code>、<code>invalid_key</code></td><td>检查 JSON、地址和 Key；内网、回环、元数据地址和本服务器自身地址不能作上游</td></tr>
+<tr><td>401</td><td><code>unauthorized</code></td><td>检查同一套 S3 密钥、Region <code>garage</code>、Service <code>s3</code>、系统时间，以及签名后是否改过请求</td></tr>
+<tr><td>404</td><td><code>job_not_found</code></td><td>检查任务 ID 或记录是否已过期</td></tr>
+<tr><td>409</td><td><code>object_exists</code>、<code>key_busy</code></td><td>改用新 Key，或从 S3 读取已有文件；同名进行中任务应查询原任务</td></tr>
+<tr><td>413</td><td>上游超过大小限制，或 JSON 请求体过大</td><td>代理文件上限 50 GiB，JSON 上限 32 KiB；二进制测速上传上限 512 MiB</td></tr>
+<tr><td>429</td><td><code>too_many_downloads</code>、<code>network_tests_busy</code></td><td>代理上限 4，网络负载测试上限 2，稍后重试</td></tr>
+<tr><td>502</td><td><code>source_http_error</code>、<code>redirect_error</code>、<code>source_transfer_failed</code>、<code>storage_or_transfer_failed</code></td><td>检查上游和任务错误信息；<code>source_http_error</code> 可包含 <code>upstream_status</code></td></tr></tbody></table></div>
+<p>如果文件流已经开始，以上传输或存储错误表现为连接中断及任务 <code>failed</code>，而不是新的 HTTP 状态。不要只凭最初的 HTTP 200 判断成功。标准 S3 接口返回 S3 XML 错误，鉴权失败通常为 403，与代理扩展的 JSON 错误格式不同。</p></section>
+<section id="limits"><h2>9. 当前限制与兼容性</h2><div class="table"><table><thead><tr><th>项目</th><th>当前行为</th></tr></thead><tbody>
+<tr><td>代理单文件 / 并发</td><td>50 GiB / 最多 4 个进行中任务；这些是代理扩展的限制</td></tr>
+<tr><td>超时</td><td>单任务流式传输上限 6 小时；上游读取空闲 60 秒、调用方写入阻塞 120 秒会触发中断处理</td></tr>
+<tr><td>上游</td><td>HTTP/HTTPS，80/443 端口，公网地址；最多 5 次重定向，每次均检查目标地址；最终响应须为 HTTP 200</td></tr>
+<tr><td>上游鉴权与断点</td><td>接受 URL 中的查询签名；不接受自定义上游 Authorization/Cookie 头、不提供 Range 代理或自动断点续传</td></tr>
+<tr><td>S3 功能</td><td>支持常用对象操作、分片上传、范围读取、预签名链接；不提供完整 AWS IAM、Bucket Policy、对象版本历史或 Object Lock</td></tr>
+<tr><td>浏览器跨域</td><td>当前未配置跨站点 fetch 所需的 CORS；后端和命令行调用不受此项影响</td></tr></tbody></table></div></section>
+<section id="reference"><h2>10. 下载与参考</h2>
+<ul><li><a href="openapi.json">OpenAPI 3.1 JSON</a>：描述自定义代理、任务、网络测试、报告和健康接口；标准 S3 操作使用 S3 SDK。导入接口工具后仍需配置 SigV4 签名，单独填写 Authorization 占位值不会自动签名。</li>
+<li><a href="examples/garagex_client.py" download>独立 Python 客户端 garagex_client.py</a>：可作为命令行工具，也可在项目中导入。</li>
+<li><a href="https://curl.se/docs/manpage.html#--aws-sigv4">curl SigV4 官方说明</a></li>
+<li><a href="https://docs.aws.amazon.com/botocore/latest/reference/config.html">Botocore 配置说明</a></li>
+<li><a href="https://garagehq.deuxfleurs.fr/documentation/reference-manual/s3-compatibility/">Garage S3 兼容范围</a></li></ul>
+</section>
+<section id="administration"><h2>11. 管理存储桶与 S3 密钥</h2>
+<p>打开 <a href="/admin/#buckets">管理控制台 → 存储桶</a>，可查看桶名称、对象数量、占用容量、创建时间和授权密钥。点击“创建存储桶”，客户输入 3～48 个小写字母、数字或短横线组成的标签并分配容量配额；完整 S3 桶名会添加客户前缀。平台自用桶名称为 3～63 个字符。点击“浏览文件”可按目录/前缀和分页查看对象、读取详情、下载和预览。文本预览前 64 KiB，常见位图最多 10 MiB，HTML/SVG 仅显示文本。</p>
+<p>新桶自动授予当前主 S3 密钥读写权限。在桶详情中点击“为此桶创建密钥”，可为外部应用生成仅授权该桶的访问密钥。使用 SDK 时把 Bucket 参数换为新桶名称；新建桶不会改变代理下载保存到 <code>garagex</code> 的默认行为。控制台目前提供桶的查看与创建。</p>
+<p>平台和客户可访问 <a href="/admin/">S3 管理控制台</a>，用各自的 S3 管理密钥登录，查看访问密钥与桶权限、主动显示 Secret Key，并为应用创建新密钥。平台在“客户租户”中开通客户并设置上限。客户只能管理自己的桶、密钥和用量。平台主密钥由平台保管；外部应用使用客户创建的受限密钥。应用密钥不能登录控制台。</p>
+<p>新密钥可以选择现有桶的读、写权限；写权限包含覆盖和删除对象，不授予桶管理权限。Secret Key 默认隐藏；点击显示后 60 秒或关闭详情窗口会清空。可复制字段，或主动下载包含密钥的凭据 JSON，请妥善保存。</p>
+<p>浏览器只在当前页面内存中持有密钥并生成 SigV4 签名，刷新或退出后需重新登录。客户应用密钥可用于标准 S3 和代理/测速扩展；客户有多个可读写桶时，代理请求须提供 <code>bucket</code>（实际桶名或桶 ID）。客户管理密钥可查看本客户全部任务，应用密钥只可查看自己创建的任务。</p>
+<p>对象响应带有浏览器沙箱策略，隔离上传的 HTML/SVG 活动页面与同域管理控制台；此入口用于对象存储和下载，不用于托管执行脚本的网站。</p>
+</section><footer>接口约定核对日期：2026-10-31 UTC。本文中的凭据均为占位值，文档与示例不包含真实密钥。</footer>
+</main></div></body></html>

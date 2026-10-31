@@ -1,0 +1,6 @@
+{
+  "name": "garagex-ui-checks",
+  "private": true,
+  "scripts": {"test": "node --test tests/ui/*.test.mjs"},
+  "devDependencies": {"jsdom": "20.0.3"}
+}

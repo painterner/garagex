@@ -1,0 +1,1344 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "GarageX 代理扩展 API",
+    "version": "1.1.0",
+    "description": "所有扩展接口复用现有 S3 Access Key/Secret Key，按 AWS S3 SigV4 生成请求头，region=garage，service=s3。标准 S3 对象操作请使用 S3 SDK；本文件仅描述自定义扩展。代理响应是文件流，正常结束在 S3 提交成功之后；中途出错会中断连接。完整说明：https://s3.example.com/docs/ 支持无存储网络测试、延迟/吞吐率报告、stop_keep 断开保留和对象保留期限。 Customer owner/application S3 keys also authenticate extension APIs. Ownership is checked for buckets, jobs, reports and network results. Application keys cannot log into the management console."
+  },
+  "servers": [
+    {
+      "url": "https://s3.example.com"
+    }
+  ],
+  "security": [
+    {
+      "S3SigV4": []
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "S3SigV4": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "Authorization",
+        "description": "完整 AWS4-HMAC-SHA256 签名头，由 SDK/curl 生成；同时发送 X-Amz-Date。不能填 Bearer Token，也不能直接填 Secret Key。",
+        "x-amazon-apigateway-authtype": "awsSigv4"
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": [
+              "code",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "upstream_status": {
+                "type": "integer"
+              }
+            }
+          }
+        }
+      },
+      "Job": {
+        "type": "object",
+        "required": [
+          "id",
+          "state",
+          "bucket",
+          "key",
+          "created_at",
+          "bytes_downloaded",
+          "bytes_stored",
+          "client_connected"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "starting",
+              "downloading",
+              "committing",
+              "completed",
+              "failed",
+              "stopped"
+            ]
+          },
+          "bucket": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "number",
+            "description": "Unix 秒时间戳"
+          },
+          "finished_at": {
+            "type": "number",
+            "description": "Unix 秒时间戳"
+          },
+          "bytes_downloaded": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "bytes_stored": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "client_connected": {
+            "type": "boolean"
+          },
+          "source_size": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "content_type": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "upstream_status": {
+                "type": "integer"
+              }
+            }
+          },
+          "disconnect_mode": {
+            "type": "string",
+            "enum": [
+              "continue",
+              "stop_keep"
+            ]
+          },
+          "download_retention_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "null 为永久，正数从对象保存完成起计时"
+          },
+          "expires_at": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Unix 秒时间戳；对象默认永久"
+          },
+          "is_partial": {
+            "type": "boolean",
+            "description": "true 表示保留了不完整的原始文件前缀"
+          },
+          "object_available": {
+            "type": "boolean"
+          },
+          "storage_state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "retained",
+              "expired",
+              "replaced"
+            ]
+          },
+          "metrics": {
+            "$ref": "#/components/schemas/TransferSummary"
+          }
+        }
+      },
+      "Statistics": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "min": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "mean": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "p95": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "max": {
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        }
+      },
+      "TransferSample": {
+        "type": "object",
+        "properties": {
+          "elapsed_seconds": {
+            "type": "number"
+          },
+          "timestamp": {
+            "type": "number"
+          },
+          "upstream_bytes": {
+            "type": "number"
+          },
+          "downstream_bytes": {
+            "type": "number"
+          },
+          "upstream_mbps": {
+            "type": "number"
+          },
+          "downstream_mbps": {
+            "type": "number"
+          },
+          "upstream_tcp_rtt_ms": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "downstream_write_wait_ms": {
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        }
+      },
+      "TransferSummary": {
+        "type": "object",
+        "properties": {
+          "duration_seconds": {
+            "type": "number"
+          },
+          "upstream_bytes": {
+            "type": "number"
+          },
+          "downstream_bytes": {
+            "type": "number"
+          },
+          "upstream_average_mbps": {
+            "type": "number"
+          },
+          "downstream_server_write_average_mbps": {
+            "type": "number"
+          },
+          "sample_count": {
+            "type": "number"
+          },
+          "phases": {
+            "type": "object",
+            "description": "dns_ms、connect_dns_tls_ms、headers_received_ms、first_body_byte_ms；可用项才出现",
+            "additionalProperties": {
+              "type": "number"
+            }
+          },
+          "latency_definition": {
+            "type": "string"
+          },
+          "downstream_definition": {
+            "type": "string"
+          }
+        }
+      },
+      "ClientSample": {
+        "type": "object",
+        "required": [
+          "elapsed_seconds",
+          "received_bytes"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "elapsed_seconds": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 21900
+          },
+          "received_bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 53687091200
+          },
+          "rtt_ms": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 120000
+          }
+        }
+      },
+      "Report": {
+        "type": "object",
+        "properties": {
+          "job": {
+            "$ref": "#/components/schemas/Job"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/TransferSummary"
+          },
+          "sample_count": {
+            "type": "integer"
+          },
+          "downsampled": {
+            "type": "boolean"
+          },
+          "timeline": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TransferSample"
+            }
+          },
+          "upstream_tcp_rtt_ms": {
+            "$ref": "#/components/schemas/Statistics"
+          },
+          "upstream_mbps": {
+            "$ref": "#/components/schemas/Statistics"
+          },
+          "downstream_server_write_mbps": {
+            "$ref": "#/components/schemas/Statistics"
+          },
+          "downstream_client": {
+            "type": "object",
+            "description": "真实下游观测需客户端上报，未上报为 not_available。",
+            "properties": {
+              "measurement": {
+                "type": "string"
+              },
+              "rtt_ms": {
+                "$ref": "#/components/schemas/Statistics"
+              },
+              "receive_mbps": {
+                "$ref": "#/components/schemas/Statistics"
+              },
+              "timeline": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "elapsed_seconds": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 21900
+                    },
+                    "received_bytes": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 53687091200
+                    },
+                    "rtt_ms": {
+                      "type": [
+                        "number",
+                        "null"
+                      ],
+                      "minimum": 0,
+                      "maximum": 120000
+                    },
+                    "received_at": {
+                      "type": "number"
+                    },
+                    "receive_mbps": {
+                      "type": "number"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "NetworkResult": {
+        "type": "object",
+        "properties": {
+          "direction": {
+            "type": "string"
+          },
+          "received_bytes": {
+            "type": "integer"
+          },
+          "payload_mbps": {
+            "type": "number"
+          },
+          "storage_payload_written": {
+            "type": "boolean",
+            "const": false
+          },
+          "summary": {
+            "$ref": "#/components/schemas/TransferSummary"
+          },
+          "timeline": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TransferSample"
+            }
+          },
+          "tcp_rtt_ms": {
+            "$ref": "#/components/schemas/Statistics"
+          },
+          "stop_reason": {
+            "type": "string"
+          },
+          "transfer_seconds": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    "parameters": {
+      "AmzDate": {
+        "in": "header",
+        "name": "X-Amz-Date",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "pattern": "^[0-9]{8}T[0-9]{6}Z$"
+        },
+        "description": "由 SigV4 签名器生成；时间偏差不得超过 15 分钟。"
+      },
+      "PayloadHash": {
+        "in": "header",
+        "name": "X-Amz-Content-SHA256",
+        "schema": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "description": "如发送，必须是实际请求体的 SHA-256；代理不接受 UNSIGNED-PAYLOAD。"
+      }
+    }
+  },
+  "paths": {
+    "/_proxy/download": {
+      "post": {
+        "operationId": "proxyDownload",
+        "summary": "边下载外部文件、边保存到 S3、边返回文件流",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AmzDate"
+          },
+          {
+            "$ref": "#/components/parameters/PayloadHash"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "url"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "format": "uri",
+                    "maxLength": 8192,
+                    "description": "公网 HTTP/HTTPS URL，端口 80 或 443；最多 5 次重定向。"
+                  },
+                  "key": {
+                    "type": "string",
+                    "pattern": "^proxy/",
+                    "description": "可省略；以 proxy/ 开头，最多 1024 UTF-8 字节；已有对象不覆盖。"
+                  },
+                  "disconnect_mode": {
+                    "type": "string",
+                    "enum": [
+                      "continue",
+                      "stop_keep"
+                    ],
+                    "default": "continue",
+                    "description": "stop_keep 在下游断开后关闭上游，并把已接收前缀保存在同一 Key，状态 stopped、is_partial=true。"
+                  },
+                  "retention_seconds": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 1,
+                    "maximum": 315360000,
+                    "default": null,
+                    "description": "对象保存完成后的保留秒数；省略/null 永久；后台约5秒检查一次，失败重试。适用于完整及部分对象。"
+                  },
+                  "bucket": {
+                    "type": "string",
+                    "description": "Target physical S3 bucket name or ID. Must belong to the caller tenant and permit read/write. Optional only when unambiguous, or for the platform initial bucket."
+                  }
+                }
+              },
+              "example": {
+                "url": "https://www.rfc-editor.org/rfc/rfc9110.txt"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "二进制响应流；须完整读取并通过任务状态确认完成。任务失败时连接中断，不能重新返回 HTTP 错误。",
+            "headers": {
+              "X-Download-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Download-Status-Url": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-S3-Bucket": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-S3-Key": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "URL 编码的 S3 Key"
+              },
+              "X-Source-Content-Length": {
+                "schema": {
+                  "type": "integer"
+                },
+                "description": "上游声明长度时提供"
+              },
+              "X-Download-Report-Url": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Download-Elapsed-Seconds": {
+                "schema": {
+                  "type": "number"
+                }
+              }
+            },
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段、URL 或 Key 不符合约定",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "S3 SigV4 鉴权失败",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "对象已存在或 Key 有进行中的任务",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "文件或请求体过大",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "代理并发任务已满",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "上游或存储错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/_proxy/jobs/{id}": {
+      "get": {
+        "operationId": "getProxyJob",
+        "summary": "查询任务进度和最终保存结果",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{32}$"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/AmzDate"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "任务状态",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "S3 SigV4 鉴权失败",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "任务不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/_proxy/health": {
+      "get": {
+        "operationId": "getProxyHealth",
+        "summary": "查询代理服务与当前任务数量",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AmzDate"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "代理健康信息",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "status",
+                    "active_downloads"
+                  ],
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "ok"
+                    },
+                    "active_downloads": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  }
+                },
+                "example": {
+                  "status": "ok",
+                  "active_downloads": 0
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "S3 SigV4 鉴权失败",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/_proxy/jobs/{id}/report": {
+      "get": {
+        "operationId": "getProxyReport",
+        "summary": "下载过程采样和完成报告",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AmzDate"
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{32}$"
+            }
+          },
+          {
+            "name": "max_points",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000,
+              "default": 1000
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "html"
+              ],
+              "default": "json"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "测试或查询结果",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Report"
+                }
+              },
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "<!doctype html>..."
+              }
+            }
+          },
+          "400": {
+            "description": "参数错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "SigV4 鉴权失败",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "并发已满",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "任务不存在或报告已过期",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/_proxy/jobs/{id}/observations": {
+      "post": {
+        "operationId": "submitClientObservations",
+        "summary": "上报客户端实际接收量与 HTTP RTT",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AmzDate"
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{32}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "测试或查询结果",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "accepted": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "SigV4 鉴权失败",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "并发已满",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "samples"
+                ],
+                "properties": {
+                  "samples": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 60,
+                    "items": {
+                      "$ref": "#/components/schemas/ClientSample"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "description": "每任务最多30000条。elapsed_seconds 与 received_bytes 单调不减；时间相对任务起点，由 X-Download-Elapsed-Seconds 对齐。"
+      }
+    },
+    "/_proxy/network/ping": {
+      "get": {
+        "operationId": "networkPing",
+        "summary": "客户端计时的 HTTP RTT 探测",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AmzDate"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "测试或查询结果",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "server_time": {
+                      "type": "number"
+                    },
+                    "measurement": {
+                      "type": "string"
+                    },
+                    "storage_payload_written": {
+                      "type": "boolean",
+                      "const": false
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "SigV4 鉴权失败",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "并发已满",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/_proxy/network/download": {
+      "get": {
+        "operationId": "networkDownload",
+        "summary": "纯网络随机载荷下载（不写存储）",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AmzDate"
+          },
+          {
+            "in": "query",
+            "name": "bytes",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 536870912,
+              "default": 33554432
+            }
+          },
+          {
+            "in": "query",
+            "name": "seconds",
+            "schema": {
+              "type": "number",
+              "minimum": 0.1,
+              "maximum": 30,
+              "default": 5
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "随机字节流；字节上限或时间上限先到即停止，调用方计时",
+            "headers": {
+              "X-Network-Test-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "SigV4 鉴权失败",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "并发已满",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/_proxy/network/upload": {
+      "post": {
+        "operationId": "networkUpload",
+        "summary": "流式读取并丢弃上传载荷（不写存储）",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AmzDate"
+          },
+          {
+            "name": "X-Amz-Content-SHA256",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "description": "必须包含在 SigV4 签名中；先验证签名，读取正文后核对完整哈希。不接受 UNSIGNED-PAYLOAD。"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "测试或查询结果",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NetworkResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "SigV4 鉴权失败",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "并发已满",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "载荷过大",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "最大512MiB、120秒，流式处理不把整个请求读入内存。SDK 在请求计时前计算签名哈希。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/_proxy/network/upstream": {
+      "post": {
+        "operationId": "networkUpstream",
+        "summary": "从指定公网 HTTP 上游接收并丢弃载荷（不写存储）",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AmzDate"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "测试或查询结果",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NetworkResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "SigV4 鉴权失败",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "并发已满",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "url"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "format": "uri",
+                    "maxLength": 8192,
+                    "description": "公网 HTTP/HTTPS URL，端口 80 或 443；最多 5 次重定向。"
+                  },
+                  "bytes": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 536870912,
+                    "default": 33554432
+                  },
+                  "seconds": {
+                    "type": "number",
+                    "minimum": 0.1,
+                    "maximum": 30,
+                    "default": 5
+                  }
+                }
+              }
+            }
+          }
+        },
+        "description": "沿用代理的公网地址与重定向检查；seconds 从响应头完成后计时。报告包含 TCP SRTT、DNS/连接/首字节阶段和接收吞吐率。"
+      }
+    },
+    "/_proxy/network/results/{id}": {
+      "get": {
+        "operationId": "getNetworkDownloadResult",
+        "summary": "下载测速的内存结果，保留10分钟",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AmzDate"
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{32}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "测试或查询结果",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string"
+                    },
+                    "summary": {
+                      "$ref": "#/components/schemas/TransferSummary"
+                    },
+                    "timeline": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/TransferSample"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "SigV4 鉴权失败",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "并发已满",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "结果过期、重启丢失或不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "x-proxy-limits": {
+    "max_bytes": 53687091200,
+    "max_concurrent": 4,
+    "request_json_max_bytes": 32768,
+    "total_timeout_seconds": 21600,
+    "source_idle_timeout_seconds": 60,
+    "client_write_timeout_seconds": 120,
+    "job_retention_seconds": 604800,
+    "continue_on_disconnect": true,
+    "download_retention_seconds": null,
+    "network_max_bytes": 536870912,
+    "network_max_concurrent": 2,
+    "network_max_seconds": 30,
+    "cleanup_interval_seconds": 5
+  }
+}

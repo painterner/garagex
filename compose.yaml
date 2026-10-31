@@ -1,0 +1,78 @@
+name: garagex
+services:
+  garage:
+    image: dxflrs/garage:v2.5.0
+    command: ["/garage", "server", "--single-node", "--default-bucket"]
+    env_file: .runtime/garage.env
+    volumes:
+      - ./.runtime/garage/garage.toml:/etc/garage.toml:ro
+      - ./.runtime/garage/admin-token:/run/garage-admin-token:ro
+      - ./.runtime/data:/var/lib/garage/data
+      - ./.runtime/meta:/var/lib/garage/meta
+    user: "10002:10002"
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ["/tmp"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+  init:
+    build: .
+    image: ${GARAGEX_IMAGE:-garagex:local}
+    user: "0:0"
+    command: ["python", "-m", "garagex.bootstrap"]
+    depends_on: [garage]
+    volumes:
+      - ./.runtime/garage/admin-token:/run/bootstrap/master-token:ro
+      - ./.runtime/secrets:/run/bootstrap/output
+    restart: "no"
+    read_only: true
+    tmpfs: ["/tmp"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    cap_add: ["CHOWN", "FOWNER", "DAC_OVERRIDE"]
+  proxy:
+    build: .
+    image: ${GARAGEX_IMAGE:-garagex:local}
+    command: ["garagex-proxy", "--config", "/etc/garagex/proxy.json"]
+    depends_on:
+      init: {condition: service_completed_successfully}
+    volumes:
+      - ./.runtime/config/proxy.json:/etc/garagex/proxy.json:ro
+      - ./.runtime/secrets/credentials.json:/etc/garagex/credentials.json:ro
+      - ./.runtime/secrets/proxy:/run/secrets:ro
+      - ./.runtime/jobs:/var/lib/garagex/jobs
+      - ./.runtime/tenants:/var/lib/garagex/tenants:ro
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ["/tmp"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    mem_limit: 384m
+  admin:
+    build: .
+    image: ${GARAGEX_IMAGE:-garagex:local}
+    command: ["garagex-admin", "--config", "/etc/garagex/admin.json"]
+    depends_on:
+      init: {condition: service_completed_successfully}
+    volumes:
+      - ./.runtime/config/admin.json:/etc/garagex/admin.json:ro
+      - ./.runtime/secrets/credentials.json:/etc/garagex/credentials.json:ro
+      - ./.runtime/secrets/admin:/run/secrets:ro
+      - ./.runtime/tenants:/var/lib/garagex/tenants
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ["/tmp"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    mem_limit: 256m
+  caddy:
+    image: caddy:2.11.7-alpine
+    depends_on: [admin, proxy]
+    ports: ["80:80", "443:443", "443:443/udp"]
+    volumes:
+      - ./.runtime/config/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./.runtime/docs:/srv/docs:ro
+      - ./.runtime/caddy-data:/data
+      - ./.runtime/caddy-config:/config
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
